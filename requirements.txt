@@ -1,0 +1,12 @@
+pandas
+numpy
+yfinance
+sqlalchemy
+python-dotenv
+matplotlib
+seaborn
+scipy
+fastapi
+uvicorn
+pydantic
+requests    
