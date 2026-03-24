@@ -10,3 +10,32 @@ fastapi
 uvicorn
 pydantic
 requests    
+# Data ingestion & storage
+pandas
+numpy
+yfinance
+sqlalchemy
+python-dotenv
+python-dateutil
+requests
+
+# Feature engineering & statistics
+scipy
+
+# Portfolio optimisation
+cvxpy
+
+# Visualisation
+matplotlib
+seaborn
+plotly
+
+# Product layer
+fastapi
+uvicorn[standard]
+pydantic
+streamlit
+
+# Optional: alternative solvers for cvxpy
+clarabel
+s
