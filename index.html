@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>InvestEng — Paper Trading</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.10.3/umd/Recharts.js"></script>
+<style>
+:root {
+  --bg:       #07070f;
+  --surface:  #0d0d1a;
+  --card:     #11111f;
+  --card2:    #151528;
+  --border:   #1c1c35;
+  --border2:  #25254a;
+  --violet:   #7c3aed;
+  --violet2:  #6d28d9;
+  --violet-glow: rgba(124,58,237,0.25);
+  --mint:     #06ffa5;
+  --mint-dim: rgba(6,255,165,0.12);
+  --red:      #ff4560;
+  --red-dim:  rgba(255,69,96,0.12);
+  --gold:     #f59e0b;
+  --text:     #e2e0ff;
+  --muted:    #6b6b9a;
+  --muted2:   #9090b8;
+  --mono:     'DM Mono', monospace;
+  --sans:     'Syne', sans-serif;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body,#root { height:100%; background:var(--bg); color:var(--text); font-family:var(--sans); }
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:var(--surface); }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+/* Layout */
+.layout { display:grid; grid-template-columns:220px 1fr; grid-template-rows:56px 1fr; height:100vh; overflow:hidden; }
+.topbar { grid-column:1/-1; display:flex; align-items:center; gap:16px; padding:0 24px; background:var(--surface); border-bottom:1px solid var(--border); z-index:100; }
+.sidebar { background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto; }
+.main { overflow-y:auto; padding:24px; }
+
+/* Logo */
+.logo { display:flex; align-items:center; gap:10px; font-size:18px; font-weight:800; letter-spacing:-0.5px; }
+.logo-mark { width:28px; height:28px; background:var(--violet); border-radius:6px; display:grid; place-items:center; font-size:14px; }
+
+/* Nav */
+.nav-section { padding:16px 12px 8px; }
+.nav-label { font-size:10px; font-weight:600; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase; padding:0 8px; margin-bottom:6px; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px; font-size:13px; font-weight:500; color:var(--muted2); cursor:pointer; transition:all 0.15s; }
+.nav-item:hover { background:var(--card); color:var(--text); }
+.nav-item.active { background:var(--violet-glow); color:var(--violet); border:1px solid rgba(124,58,237,0.3); }
+.nav-icon { font-size:16px; width:20px; text-align:center; }
+
+/* Cards */
+.card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+.card-sm { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; }
+
+/* Metric tiles */
+.metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:20px; }
+.metric-tile { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; }
+.metric-label { font-size:11px; font-weight:500; letter-spacing:0.8px; color:var(--muted); text-transform:uppercase; margin-bottom:8px; }
+.metric-value { font-family:var(--mono); font-size:22px; font-weight:500; }
+.metric-sub { font-family:var(--mono); font-size:12px; margin-top:4px; }
+.pos { color:var(--mint); }
+.neg { color:var(--red); }
+.neu { color:var(--muted2); }
+
+/* Table */
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead tr { border-bottom:1px solid var(--border2); }
+th { text-align:left; font-size:10px; font-weight:600; letter-spacing:1px; color:var(--muted); text-transform:uppercase; padding:10px 12px; white-space:nowrap; }
+td { padding:11px 12px; font-family:var(--mono); font-size:13px; border-bottom:1px solid var(--border); white-space:nowrap; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:rgba(255,255,255,0.02); }
+
+/* Buttons */
+.btn { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; border-radius:8px; font-family:var(--sans); font-size:13px; font-weight:600; border:none; cursor:pointer; transition:all 0.15s; }
+.btn-primary { background:var(--violet); color:white; }
+.btn-primary:hover { background:var(--violet2); }
+.btn-buy { background:var(--mint-dim); color:var(--mint); border:1px solid rgba(6,255,165,0.3); }
+.btn-buy:hover { background:rgba(6,255,165,0.2); }
+.btn-sell { background:var(--red-dim); color:var(--red); border:1px solid rgba(255,69,96,0.3); }
+.btn-sell:hover { background:rgba(255,69,96,0.2); }
+.btn-ghost { background:transparent; color:var(--muted2); border:1px solid var(--border2); }
+.btn-ghost:hover { color:var(--text); border-color:var(--muted); }
+.btn-sm { padding:5px 12px; font-size:12px; }
+.btn:disabled { opacity:0.4; cursor:not-allowed; }
+
+/* Inputs */
+.input { background:var(--card2); border:1px solid var(--border2); border-radius:8px; padding:10px 14px; font-family:var(--mono); font-size:14px; color:var(--text); width:100%; outline:none; transition:border 0.15s; }
+.input:focus { border-color:var(--violet); }
+.input::placeholder { color:var(--muted); }
+.input-label { font-size:11px; font-weight:600; letter-spacing:0.8px; color:var(--muted); text-transform:uppercase; margin-bottom:6px; display:block; }
+.form-group { margin-bottom:14px; }
+
+/* Badge */
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; font-family:var(--mono); }
+.badge-buy { background:var(--mint-dim); color:var(--mint); }
+.badge-sell { background:var(--red-dim); color:var(--red); }
+.badge-stock { background:rgba(124,58,237,0.15); color:#a78bfa; }
+.badge-etf { background:rgba(245,158,11,0.15); color:var(--gold); }
+.badge-crypto { background:rgba(6,182,212,0.15); color:#22d3ee; }
+
+/* Auth screen */
+.auth-screen { display:flex; align-items:center; justify-content:center; min-height:100vh; background:var(--bg); }
+.auth-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:40px; width:100%; max-width:420px; }
+.auth-logo { display:flex; align-items:center; gap:12px; margin-bottom:32px; font-size:22px; font-weight:800; }
+
+/* Ticker pill */
+.ticker-pill { display:inline-flex; align-items:center; gap:4px; background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.25); border-radius:6px; padding:2px 8px; font-family:var(--mono); font-size:12px; font-weight:500; color:#c4b5fd; }
+
+/* Live dot */
+.live-dot { width:7px; height:7px; border-radius:50%; background:var(--mint); box-shadow:0 0 6px var(--mint); animation:pulse 2s infinite; display:inline-block; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+/* Toast */
+.toast-wrap { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+.toast { background:var(--card2); border:1px solid var(--border2); border-radius:10px; padding:12px 18px; font-size:13px; min-width:260px; max-width:360px; display:flex; align-items:center; gap:10px; animation:slideIn 0.25s ease; }
+.toast.success { border-color:rgba(6,255,165,0.4); }
+.toast.error   { border-color:rgba(255,69,96,0.4); }
+@keyframes slideIn { from{transform:translateX(40px);opacity:0;} to{transform:translateX(0);opacity:1;} }
+
+/* Market ticker tape */
+.tape { height:36px; background:var(--surface); border-bottom:1px solid var(--border); overflow:hidden; display:flex; align-items:center; white-space:nowrap; }
+.tape-inner { display:inline-flex; gap:32px; animation:scroll 60s linear infinite; padding:0 20px; }
+@keyframes scroll { from{transform:translateX(0);} to{transform:translateX(-50%);} }
+.tape-item { display:flex; align-items:center; gap:6px; font-size:12px; font-family:var(--mono); }
+
+/* Search dropdown */
+.search-wrap { position:relative; }
+.search-dropdown { position:absolute; top:calc(100%+6px); left:0; right:0; background:var(--card2); border:1px solid var(--border2); border-radius:10px; z-index:999; max-height:280px; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+.search-item { display:flex; align-items:center; justify-content:space-between; padding:11px 14px; cursor:pointer; transition:background 0.1s; }
+.search-item:hover { background:var(--card); }
+.search-name { font-size:13px; color:var(--muted2); }
+
+/* Chart container */
+.chart-wrap { width:100%; height:220px; }
+
+/* Grid layouts */
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+
+/* Page header */
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; }
+.page-title { font-size:22px; font-weight:800; letter-spacing:-0.5px; }
+.page-sub { font-size:13px; color:var(--muted2); margin-top:2px; }
+
+/* Leaderboard */
+.rank-badge { width:28px; height:28px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:700; font-family:var(--mono); }
+.rank-1 { background:rgba(245,158,11,0.2); color:var(--gold); border:1px solid rgba(245,158,11,0.4); }
+.rank-2 { background:rgba(156,163,175,0.15); color:#9ca3af; border:1px solid rgba(156,163,175,0.3); }
+.rank-3 { background:rgba(180,100,60,0.2); color:#cd7c50; border:1px solid rgba(180,100,60,0.4); }
+.rank-n { background:var(--card2); color:var(--muted); border:1px solid var(--border); }
+
+.avatar { width:32px; height:32px; border-radius:50%; display:grid; place-items:center; font-size:13px; font-weight:700; }
+
+/* Tabs */
+.tabs { display:flex; gap:4px; background:var(--card); border-radius:10px; padding:4px; margin-bottom:20px; width:fit-content; }
+.tab { padding:7px 16px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; transition:all 0.15s; color:var(--muted2); }
+.tab.active { background:var(--violet); color:white; }
+
+/* Notification dot */
+.dot-live { width:6px; height:6px; border-radius:50%; background:var(--mint); display:inline-block; animation:pulse 2s infinite; }
+
+/* Empty state */
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px; color:var(--muted); text-align:center; gap:12px; }
+.empty-icon { font-size:48px; opacity:0.4; }
+.empty-text { font-size:14px; }
+
+/* Responsive */
+@media(max-width:768px) {
+  .layout { grid-template-columns:1fr; grid-template-rows:56px auto 1fr; }
+  .sidebar { display:none; }
+  .grid-2,.grid-3 { grid-template-columns:1fr; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } = React;
+const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, Cell, PieChart, Pie } = Recharts;
+
+const API = "http://localhost:8000";
+
+/* ═══════════════════════════════════════════════════════ Context ══ */
+const AppCtx = createContext();
+
+function useApp() { return useContext(AppCtx); }
+
+/* ═══════════════════════════════════════════════════════ Utils ════ */
+const fmt = {
+  usd : v => v == null ? "—" : `$${Number(v).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2})}`,
+  pct : v => v == null ? "—" : `${v>=0?"+":""}${Number(v).toFixed(2)}%`,
+  num : v => v == null ? "—" : Number(v).toLocaleString("en-US", {maximumFractionDigits:4}),
+  compact: v => { const n=Number(v); if(n>=1e9) return `$${(n/1e9).toFixed(2)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(2)}M`; return fmt.usd(n); },
+};
+const pnlClass = v => v > 0 ? "pos" : v < 0 ? "neg" : "neu";
+const assetBadge = t => {
+  if(!t) return null;
+  if(t==="crypto") return <span className="badge badge-crypto">CRYPTO</span>;
+  if(t==="etfs")   return <span className="badge badge-etf">ETF</span>;
+  return <span className="badge badge-stock">STOCK</span>;
+};
+
+/* ═══════════════════════════════════════════════════════ API ══════ */
+async function api(method, path, body, token) {
+  const r = await fetch(`${API}${path}`, {
+    method,
+    headers: { "Content-Type":"application/json", ...(token?{"Authorization":`Bearer ${token}`}:{}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json();
+  if(!r.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
+
+/* ═══════════════════════════════════════════════════════ Toast ════ */
+function ToastContainer({ toasts }) {
+  return <div className="toast-wrap">
+    {toasts.map(t => (
+      <div key={t.id} className={`toast ${t.type}`}>
+        <span>{t.type==="success"?"✅":"❌"}</span>
+        <span>{t.msg}</span>
+      </div>
+    ))}
+  </div>;
+}
+
+/* ═══════════════════════════════════════════════════════ Auth ═════ */
+function AuthScreen({ onLogin }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ username:"", email:"", password:"", display_name:"" });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async e => {
+    e.preventDefault(); setErr(""); setLoading(true);
+    try {
+      let data;
+      if(mode==="login") data = await api("POST","/auth/login",{username:form.username,password:form.password});
+      else data = await api("POST","/auth/register",form);
+      onLogin(data);
+    } catch(ex){ setErr(ex.message); }
+    finally{ setLoading(false); }
+  };
+
+  return (
+    <div className="auth-screen">
+      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at 50% 0%, rgba(124,58,237,0.15) 0%, transparent 60%)"}}/>
+      <div className="auth-card" style={{position:"relative"}}>
+        <div className="auth-logo">
+          <div className="logo-mark">📈</div>
+          <span>InvestEng</span>
+        </div>
+        <div style={{marginBottom:24,fontSize:13,color:"var(--muted2)"}}>
+          {mode==="login" ? "Welcome back. Sign in to continue." : "Create your free demo account."}
+        </div>
+        <div className="tabs" style={{marginBottom:20}}>
+          <div className={`tab ${mode==="login"?"active":""}`} onClick={()=>{setMode("login");setErr("");}}>Sign In</div>
+          <div className={`tab ${mode==="register"?"active":""}`} onClick={()=>{setMode("register");setErr("");}}>Sign Up</div>
+        </div>
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label className="input-label">Username</label>
+            <input className="input" placeholder="your_username" value={form.username}
+              onChange={e=>setForm({...form,username:e.target.value})} required/>
+          </div>
+          {mode==="register" && <>
+            <div className="form-group">
+              <label className="input-label">Email</label>
+              <input className="input" type="email" placeholder="you@email.com" value={form.email}
+                onChange={e=>setForm({...form,email:e.target.value})} required/>
+            </div>
+            <div className="form-group">
+              <label className="input-label">Display Name (optional)</label>
+              <input className="input" placeholder="How you appear on the leaderboard" value={form.display_name}
+                onChange={e=>setForm({...form,display_name:e.target.value})}/>
+            </div>
+          </>}
+          <div className="form-group">
+            <label className="input-label">Password</label>
+            <input className="input" type="password" placeholder="••••••••" value={form.password}
+              onChange={e=>setForm({...form,password:e.target.value})} required/>
+          </div>
+          {err && <div style={{background:"var(--red-dim)",border:"1px solid rgba(255,69,96,0.3)",borderRadius:8,padding:"10px 14px",fontSize:13,color:"var(--red)",marginBottom:14}}>{err}</div>}
+          <button className="btn btn-primary" type="submit" style={{width:"100%",justifyContent:"center"}} disabled={loading}>
+            {loading ? "Please wait…" : mode==="login" ? "Sign In" : "Create Account"}
+          </button>
+        </form>
+        <div style={{marginTop:20,fontSize:12,color:"var(--muted)",textAlign:"center"}}>
+          🔒 Demo account · $100,000 virtual balance · Real market prices
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Sidebar ══ */
+const NAV = [
+  { id:"dashboard",    icon:"⬡",  label:"Dashboard"  },
+  { id:"market",       icon:"◈",  label:"Markets"    },
+  { id:"portfolio",    icon:"◉",  label:"Portfolio"  },
+  { id:"trade",        icon:"⟳",  label:"Trade"      },
+  { id:"watchlist",    icon:"◫",  label:"Watchlist"  },
+  { id:"history",      icon:"≡",  label:"History"    },
+  { id:"leaderboard",  icon:"▲",  label:"Leaderboard"},
+];
+
+function Sidebar({ page, setPage, user }) {
+  return (
+    <nav className="sidebar">
+      <div style={{padding:"16px 16px 8px",borderBottom:"1px solid var(--border)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+          <div className="avatar" style={{background:user.avatar_color, fontSize:13}}>
+            {(user.display_name||user.username)[0].toUpperCase()}
+          </div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600}}>{user.display_name||user.username}</div>
+            <div style={{fontSize:11,color:"var(--muted)"}}>@{user.username}</div>
+          </div>
+        </div>
+      </div>
+      <div className="nav-section">
+        <div className="nav-label">Navigation</div>
+        {NAV.map(n => (
+          <div key={n.id} className={`nav-item ${page===n.id?"active":""}`} onClick={()=>setPage(n.id)}>
+            <span className="nav-icon">{n.icon}</span>
+            {n.label}
+          </div>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Tape ═════ */
+function TickerTape({ prices }) {
+  const items = Object.values(prices).slice(0,24);
+  if(!items.length) return null;
+  const doubled = [...items,...items];
+  return (
+    <div className="tape">
+      <div className="tape-inner">
+        {doubled.map((q,i)=>(
+          <div key={i} className="tape-item">
+            <span style={{fontWeight:600,color:"var(--text)"}}>{q.ticker}</span>
+            <span style={{color:q.change_pct>=0?"var(--mint)":"var(--red)"}}>{fmt.usd(q.price)}</span>
+            <span style={{color:q.change_pct>=0?"var(--mint)":"var(--red)",fontSize:11}}>{fmt.pct(q.change_pct)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Dashboard ═ */
+function Dashboard() {
+  const { portfolio, prices, token, addToast } = useApp();
+  const [movers, setMovers] = useState({ gainers:[], losers:[], active:[] });
+
+  useEffect(()=>{
+    api("GET","/market/movers",null,token).then(d=>setMovers(d)).catch(()=>{});
+  },[prices]);
+
+  if(!portfolio) return <div className="empty"><div className="empty-icon">📊</div><div>Loading portfolio…</div></div>;
+
+  const histData = portfolio.positions?.slice(0,8).map(p=>({
+    name:p.ticker, value:p.current_value, fill: p.unrealized_pnl>=0?"var(--mint)":"var(--red)"
+  })) || [];
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Dashboard</div>
+          <div className="page-sub">Real-time overview · <span className="live-dot"/> Live prices</div>
+        </div>
+        <div style={{fontSize:12,color:"var(--muted)",fontFamily:"var(--mono)"}}>
+          {new Date().toLocaleString("en-US",{dateStyle:"medium",timeStyle:"short"})}
+        </div>
+      </div>
+
+      <div className="metric-grid">
+        {[
+          {label:"Total Value",    value:fmt.usd(portfolio.total_value),    sub:null},
+          {label:"Cash Balance",   value:fmt.usd(portfolio.cash_balance),   sub:null},
+          {label:"Invested",       value:fmt.usd(portfolio.invested_value), sub:null},
+          {label:"Total P&L",      value:fmt.usd(portfolio.total_pnl),      sub:fmt.pct(portfolio.total_pnl_pct), cls:pnlClass(portfolio.total_pnl)},
+          {label:"Today's P&L",    value:fmt.usd(portfolio.day_pnl),        sub:fmt.pct(portfolio.day_pnl_pct),   cls:pnlClass(portfolio.day_pnl)},
+        ].map(m=>(
+          <div className="metric-tile" key={m.label}>
+            <div className="metric-label">{m.label}</div>
+            <div className={`metric-value ${m.cls||""}`}>{m.value}</div>
+            {m.sub && <div className={`metric-sub ${m.cls||""}`}>{m.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid-2" style={{marginBottom:16}}>
+        <div className="card">
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+            <span style={{fontSize:14,fontWeight:600}}>Portfolio Allocation</span>
+            <span style={{fontSize:12,color:"var(--muted)"}}>By Market Value</span>
+          </div>
+          {histData.length>0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <PieChart>
+                <Pie data={histData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} innerRadius={40} paddingAngle={2}>
+                  {histData.map((entry,i)=><Cell key={i} fill={["#7c3aed","#06ffa5","#f59e0b","#ff4560","#22d3ee","#a78bfa","#6ee7b7","#fcd34d"][i%8]}/>)}
+                </Pie>
+                <Tooltip formatter={(v)=>fmt.usd(v)} contentStyle={{background:"var(--card2)",border:"1px solid var(--border2)",borderRadius:8,fontFamily:"var(--mono)",fontSize:12}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="empty" style={{padding:40}}>
+              <div className="empty-icon" style={{fontSize:32}}>📊</div>
+              <div className="empty-text">No positions yet</div>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Top Movers Today</div>
+          <div style={{fontSize:11,color:"var(--muted)",letterSpacing:1,marginBottom:8}}>GAINERS</div>
+          {movers.gainers.slice(0,3).map(q=>(
+            <div key={q.ticker} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span className="ticker-pill">{q.ticker}</span>
+                <span style={{fontSize:11,color:"var(--muted2)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis"}}>{q.company_name}</span>
+              </div>
+              <div style={{textAlign:"right",fontFamily:"var(--mono)"}}>
+                <div style={{fontSize:13}}>{fmt.usd(q.price)}</div>
+                <div style={{fontSize:11,color:"var(--mint)"}}>{fmt.pct(q.change_pct)}</div>
+              </div>
+            </div>
+          ))}
+          <div style={{fontSize:11,color:"var(--muted)",letterSpacing:1,margin:"12px 0 8px"}}>LOSERS</div>
+          {movers.losers.slice(0,3).map(q=>(
+            <div key={q.ticker} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span className="ticker-pill">{q.ticker}</span>
+                <span style={{fontSize:11,color:"var(--muted2)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis"}}>{q.company_name}</span>
+              </div>
+              <div style={{textAlign:"right",fontFamily:"var(--mono)"}}>
+                <div style={{fontSize:13}}>{fmt.usd(q.price)}</div>
+                <div style={{fontSize:11,color:"var(--red)"}}>{fmt.pct(q.change_pct)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {portfolio.positions?.length > 0 && (
+        <div className="card">
+          <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Holdings Summary</div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Current</th>
+                <th>Value</th><th>P&L</th><th>Day Chg</th>
+              </tr></thead>
+              <tbody>
+                {portfolio.positions.map(p=>(
+                  <tr key={p.ticker}>
+                    <td><span className="ticker-pill">{p.ticker}</span></td>
+                    <td>{fmt.num(p.quantity)}</td>
+                    <td>{fmt.usd(p.avg_cost)}</td>
+                    <td>{fmt.usd(p.current_price)}</td>
+                    <td>{fmt.usd(p.current_value)}</td>
+                    <td className={pnlClass(p.unrealized_pnl)}>{fmt.usd(p.unrealized_pnl)}<br/><span style={{fontSize:11}}>{fmt.pct(p.unrealized_pnl_pct)}</span></td>
+                    <td className={pnlClass(p.day_change)}>{fmt.pct(p.day_change_pct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Markets ══ */
+function Markets() {
+  const { prices, token } = useApp();
+  const [tab, setTab] = useState("us_stocks");
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(()=>{
+    return Object.values(prices).filter(q=>{
+      if(q.asset_type!==tab) return false;
+      if(search) return q.ticker.includes(search.toUpperCase())||q.company_name?.toUpperCase().includes(search.toUpperCase());
+      return true;
+    });
+  },[prices,tab,search]);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Markets</div>
+          <div className="page-sub">{Object.keys(prices).length} live instruments · <span className="live-dot"/> Real-time</div>
+        </div>
+      </div>
+
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+        <div className="tabs" style={{marginBottom:0}}>
+          {[["us_stocks","Stocks"],["etfs","ETFs"],["crypto","Crypto"]].map(([k,l])=>(
+            <div key={k} className={`tab ${tab===k?"active":""}`} onClick={()=>setTab(k)}>{l}</div>
+          ))}
+        </div>
+        <input className="input" style={{maxWidth:200}} placeholder="Search ticker…" value={search} onChange={e=>setSearch(e.target.value)}/>
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Ticker</th><th>Company</th><th>Price</th><th>Change</th><th>Change %</th>
+              <th>Day High</th><th>Day Low</th><th>Volume</th>
+            </tr></thead>
+            <tbody>
+              {filtered.length===0 ? (
+                <tr><td colSpan={8}><div className="empty"><div className="empty-text">No data yet — prices loading…</div></div></td></tr>
+              ) : filtered.map(q=>(
+                <tr key={q.ticker}>
+                  <td><span className="ticker-pill">{q.ticker}</span></td>
+                  <td style={{color:"var(--muted2)",fontFamily:"var(--sans)",fontSize:12}}>{q.company_name||"—"}</td>
+                  <td style={{fontWeight:500}}>{fmt.usd(q.price)}</td>
+                  <td className={pnlClass(q.change)}>{q.change>=0?"+":""}{fmt.usd(Math.abs(q.change))}</td>
+                  <td><span style={{color:q.change_pct>=0?"var(--mint)":"var(--red)",fontWeight:600}}>{fmt.pct(q.change_pct)}</span></td>
+                  <td>{fmt.usd(q.day_high)}</td>
+                  <td>{fmt.usd(q.day_low)}</td>
+                  <td style={{color:"var(--muted2)"}}>{fmt.compact(q.volume)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Portfolio ═ */
+function Portfolio() {
+  const { portfolio, prices } = useApp();
+  const [history, setHistory] = useState([]);
+  const { token } = useApp();
+
+  useEffect(()=>{
+    api("GET","/portfolio/history?limit=72",null,token).then(d=>setHistory(d.history||[])).catch(()=>{});
+  },[]);
+
+  if(!portfolio) return <div className="empty"><div className="empty-icon">📁</div><div>Loading…</div></div>;
+
+  const chartData = history.map(s=>({
+    time: new Date(s.snapped_at).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"}),
+    value: s.total_value,
+    pnl: s.pnl,
+  }));
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Portfolio</div>
+          <div className="page-sub">Performance & holdings</div>
+        </div>
+        <div className={`metric-value ${pnlClass(portfolio.total_pnl)}`} style={{fontSize:18}}>
+          {fmt.usd(portfolio.total_pnl)} &nbsp;<span style={{fontSize:14}}>{fmt.pct(portfolio.total_pnl_pct)}</span>
+        </div>
+      </div>
+
+      <div className="metric-grid" style={{gridTemplateColumns:"repeat(4,1fr)"}}>
+        {[
+          {label:"Total Value",    value:fmt.usd(portfolio.total_value)},
+          {label:"Cash Available", value:fmt.usd(portfolio.cash_balance)},
+          {label:"Invested",       value:fmt.usd(portfolio.invested_value)},
+          {label:"Today",          value:fmt.usd(portfolio.day_pnl), sub:fmt.pct(portfolio.day_pnl_pct), cls:pnlClass(portfolio.day_pnl)},
+        ].map(m=>(
+          <div className="metric-tile" key={m.label}>
+            <div className="metric-label">{m.label}</div>
+            <div className={`metric-value ${m.cls||""}`}>{m.value}</div>
+            {m.sub&&<div className={`metric-sub ${m.cls||""}`}>{m.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      {chartData.length>1 && (
+        <div className="card" style={{marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Portfolio Value — Equity Curve</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="vgrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#7c3aed" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="time" tick={{fill:"var(--muted)",fontSize:10}} tickLine={false} axisLine={false}/>
+              <YAxis tick={{fill:"var(--muted)",fontSize:10,fontFamily:"var(--mono)"}} tickLine={false} axisLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
+              <Tooltip formatter={(v)=>[fmt.usd(v),"Value"]} contentStyle={{background:"var(--card2)",border:"1px solid var(--border2)",borderRadius:8,fontFamily:"var(--mono)",fontSize:12}}/>
+              <Area type="monotone" dataKey="value" stroke="#7c3aed" strokeWidth={2} fill="url(#vgrad)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="card">
+        <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Open Positions</div>
+        {portfolio.positions?.length===0 ? (
+          <div className="empty"><div className="empty-icon">📭</div><div className="empty-text">No open positions. Head to Trade to get started.</div></div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Ticker</th><th>Type</th><th>Qty</th><th>Avg Cost</th><th>Current</th>
+                <th>Cost Basis</th><th>Mkt Value</th><th>Unrealised P&L</th><th>Realised P&L</th><th>Day</th>
+              </tr></thead>
+              <tbody>
+                {portfolio.positions.map(p=>(
+                  <tr key={p.ticker}>
+                    <td><span className="ticker-pill">{p.ticker}</span><div style={{fontSize:11,color:"var(--muted2)",fontFamily:"var(--sans)"}}>{p.company_name}</div></td>
+                    <td>{assetBadge(p.asset_type)}</td>
+                    <td>{fmt.num(p.quantity)}</td>
+                    <td>{fmt.usd(p.avg_cost)}</td>
+                    <td>{fmt.usd(p.current_price)}</td>
+                    <td>{fmt.usd(p.cost_basis)}</td>
+                    <td>{fmt.usd(p.current_value)}</td>
+                    <td className={pnlClass(p.unrealized_pnl)}>{fmt.usd(p.unrealized_pnl)}<br/><span style={{fontSize:11}}>{fmt.pct(p.unrealized_pnl_pct)}</span></td>
+                    <td className={pnlClass(p.realized_pnl)}>{fmt.usd(p.realized_pnl)}</td>
+                    <td className={pnlClass(p.day_change)}>{fmt.pct(p.day_change_pct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Trade ════ */
+function Trade() {
+  const { token, refreshPortfolio, addToast, prices, portfolio } = useApp();
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [quote, setQuote] = useState(null);
+  const [side, setSide] = useState("BUY");
+  const [qty, setQty] = useState("");
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showDrop, setShowDrop] = useState(false);
+  const searchRef = useRef();
+
+  // Live quote update
+  useEffect(()=>{
+    if(!selected) return;
+    const q = prices[selected.ticker];
+    if(q) setQuote(q);
+  },[prices, selected]);
+
+  // Search
+  useEffect(()=>{
+    if(search.length<1){ setResults([]); return; }
+    api("GET",`/market/search?q=${encodeURIComponent(search)}&limit=8`,null,token)
+      .then(d=>{ setResults(d.results||[]); setShowDrop(true); })
+      .catch(()=>{});
+  },[search]);
+
+  const selectTicker = async item => {
+    setSelected(item); setSearch(""); setShowDrop(false); setQty("");
+    try {
+      const q = await api("GET",`/market/quote/${item.ticker}`,null,token);
+      setQuote(q);
+    } catch{}
+  };
+
+  const total = quote && qty ? (parseFloat(qty)||0) * quote.price : 0;
+  const maxBuy = quote && portfolio ? Math.floor(portfolio.cash_balance / quote.price * 100) / 100 : 0;
+  const heldPos = portfolio?.positions?.find(p=>p.ticker===selected?.ticker);
+  const maxSell = heldPos?.quantity || 0;
+
+  const submit = async e => {
+    e.preventDefault(); if(!selected||!qty||loading) return;
+    setLoading(true);
+    try {
+      const data = await api("POST","/trade",{ ticker:selected.ticker, order_type:side, quantity:parseFloat(qty), note:note||undefined }, token);
+      addToast(data.message, "success");
+      setQty(""); setNote("");
+      await refreshPortfolio();
+    } catch(ex){ addToast(ex.message, "error"); }
+    finally{ setLoading(false); }
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Trade</div>
+          <div className="page-sub">Execute orders at live market prices</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div>
+          {/* Search */}
+          <div className="card" style={{marginBottom:16}}>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Select Instrument</div>
+            <div className="search-wrap" ref={searchRef}>
+              <input className="input" placeholder="Search ticker or company name…" value={search}
+                onChange={e=>{setSearch(e.target.value);}} onFocus={()=>results.length&&setShowDrop(true)}/>
+              {showDrop && results.length>0 && (
+                <div className="search-dropdown">
+                  {results.map(r=>(
+                    <div key={r.ticker} className="search-item" onClick={()=>selectTicker(r)}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span className="ticker-pill">{r.ticker}</span>
+                        <div>
+                          <div className="search-name">{r.company_name}</div>
+                        </div>
+                      </div>
+                      {assetBadge(r.asset_type)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quote card */}
+          {selected && quote && (
+            <div className="card" style={{marginBottom:16,borderColor:"rgba(124,58,237,0.4)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                    <span className="ticker-pill" style={{fontSize:15,padding:"3px 10px"}}>{quote.ticker}</span>
+                    {assetBadge(quote.asset_type)}
+                  </div>
+                  <div style={{fontSize:12,color:"var(--muted2)"}}>{quote.company_name}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:26,fontFamily:"var(--mono)",fontWeight:500}}>{fmt.usd(quote.price)}</div>
+                  <div style={{fontSize:13,color:quote.change_pct>=0?"var(--mint)":"var(--red)",fontFamily:"var(--mono)"}}>
+                    {quote.change>=0?"+":""}{fmt.usd(Math.abs(quote.change))} ({fmt.pct(quote.change_pct)})
+                  </div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:24,marginTop:16,paddingTop:12,borderTop:"1px solid var(--border)"}}>
+                {[["Open",quote.open_price],["High",quote.day_high],["Low",quote.day_low],["Vol",quote.volume]].map(([l,v])=>(
+                  <div key={l}>
+                    <div style={{fontSize:10,color:"var(--muted)",letterSpacing:0.8}}>{l}</div>
+                    <div style={{fontSize:12,fontFamily:"var(--mono)"}}>{l==="Vol"?fmt.compact(v):fmt.usd(v)}</div>
+                  </div>
+                ))}
+              </div>
+              {heldPos && <div style={{marginTop:12,padding:"8px 12px",background:"var(--violet-glow)",borderRadius:8,fontSize:12,fontFamily:"var(--mono)"}}>
+                Holding {fmt.num(heldPos.quantity)} shares · {fmt.pct(heldPos.unrealized_pnl_pct)} P&L
+              </div>}
+            </div>
+          )}
+
+          {/* Order form */}
+          {selected && (
+            <div className="card">
+              <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Place Order</div>
+              <div className="tabs" style={{marginBottom:16}}>
+                <div className={`tab ${side==="BUY"?"active":""}`} style={side==="BUY"?{background:"var(--mint-dim)",color:"var(--mint)"}:{}} onClick={()=>setSide("BUY")}>BUY</div>
+                <div className={`tab ${side==="SELL"?"active":""}`} style={side==="SELL"?{background:"var(--red-dim)",color:"var(--red)"}:{}} onClick={()=>setSide("SELL")}>SELL</div>
+              </div>
+              <form onSubmit={submit}>
+                <div className="form-group">
+                  <label className="input-label">Quantity (shares)</label>
+                  <input className="input" type="number" step="0.0001" min="0.0001" placeholder="0.00" value={qty}
+                    onChange={e=>setQty(e.target.value)} required/>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    {side==="BUY" && [0.25,0.5,0.75,1].map(f=>(
+                      <button key={f} type="button" className="btn btn-ghost btn-sm"
+                        onClick={()=>setQty(String(Math.floor(maxBuy*f*10000)/10000))}>
+                        {f*100}%
+                      </button>
+                    ))}
+                    {side==="SELL" && [0.25,0.5,0.75,1].map(f=>(
+                      <button key={f} type="button" className="btn btn-ghost btn-sm"
+                        onClick={()=>setQty(String(Math.floor(maxSell*f*10000)/10000))}>
+                        {f*100}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="input-label">Note (optional)</label>
+                  <input className="input" placeholder="e.g. NVDA earnings play" value={note} onChange={e=>setNote(e.target.value)}/>
+                </div>
+                {total>0 && (
+                  <div style={{padding:"12px 16px",background:"var(--card2)",borderRadius:8,marginBottom:14,fontFamily:"var(--mono)",fontSize:13}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                      <span style={{color:"var(--muted)"}}>Est. Total</span>
+                      <span style={{fontWeight:600}}>{fmt.usd(total)}</span>
+                    </div>
+                    {side==="BUY"&&<div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+                      <span style={{color:"var(--muted)"}}>Cash After</span>
+                      <span style={{color:portfolio?.cash_balance-total>=0?"var(--mint)":"var(--red)"}}>{fmt.usd((portfolio?.cash_balance||0)-total)}</span>
+                    </div>}
+                  </div>
+                )}
+                <button className={`btn ${side==="BUY"?"btn-buy":"btn-sell"}`} type="submit" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"12px"}} disabled={loading||!qty}>
+                  {loading?"Executing…":`${side} ${qty||"0"} × ${selected.ticker}`}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {!selected && (
+            <div className="empty" style={{paddingTop:60}}>
+              <div className="empty-icon">🔍</div>
+              <div className="empty-text">Search for a ticker above to begin trading</div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: quick access */}
+        <div>
+          <div className="card" style={{marginBottom:16}}>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Quick Trade</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {["AAPL","MSFT","NVDA","BTC-USD","ETH-USD","SPY","QQQ","TSLA","GOOGL","AMZN"].map(t=>(
+                <button key={t} className="btn btn-ghost btn-sm" onClick={()=>selectTicker({ticker:t,asset_type:"us_stocks"})}>
+                  {t}
+                  {prices[t] && <span style={{marginLeft:6,color:prices[t].change_pct>=0?"var(--mint)":"var(--red)",fontSize:10}}>{fmt.pct(prices[t].change_pct)}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Account</div>
+            {[
+              ["Cash Balance", fmt.usd(portfolio?.cash_balance)],
+              ["Portfolio Value", fmt.usd(portfolio?.total_value)],
+              ["Total P&L", fmt.usd(portfolio?.total_pnl)],
+              ["Open Positions", portfolio?.positions?.length||0],
+            ].map(([l,v])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                <span style={{fontSize:13,color:"var(--muted2)"}}>{l}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:13}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Watchlist ═ */
+function WatchlistPage() {
+  const { token, prices, addToast } = useApp();
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState([]);
+
+  const load = () => api("GET","/watchlist",null,token).then(d=>setItems(d.watchlist||[])).catch(()=>{});
+  useEffect(()=>{ load(); },[]);
+
+  useEffect(()=>{
+    if(search.length<1){setResults([]);return;}
+    api("GET",`/market/search?q=${search}&limit=6`,null,token).then(d=>setResults(d.results||[])).catch(()=>{});
+  },[search]);
+
+  const add = async ticker => {
+    try { await api("POST","/watchlist",{ticker},token); load(); setSearch(""); setResults([]); addToast(`${ticker} added to watchlist`,"success"); }
+    catch(ex){ addToast(ex.message,"error"); }
+  };
+
+  const remove = async ticker => {
+    try { await api("DELETE",`/watchlist/${ticker}`,null,token); setItems(i=>i.filter(x=>x.ticker!==ticker)); addToast(`${ticker} removed`,"success"); }
+    catch(ex){ addToast(ex.message,"error"); }
+  };
+
+  const enriched = items.map(item=>({...item,...(prices[item.ticker]||{})}));
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Watchlist</div><div className="page-sub">Track instruments you're watching</div></div>
+      </div>
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Add to Watchlist</div>
+        <div className="search-wrap">
+          <input className="input" placeholder="Search ticker…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          {results.length>0&&<div className="search-dropdown">
+            {results.map(r=>(
+              <div key={r.ticker} className="search-item" onClick={()=>add(r.ticker)}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <span className="ticker-pill">{r.ticker}</span>
+                  <span className="search-name">{r.company_name}</span>
+                </div>
+                {assetBadge(r.asset_type)}
+              </div>
+            ))}
+          </div>}
+        </div>
+      </div>
+      <div className="card">
+        {enriched.length===0 ? (
+          <div className="empty"><div className="empty-icon">👁</div><div className="empty-text">Your watchlist is empty. Add instruments above.</div></div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Ticker</th><th>Company</th><th>Type</th><th>Price</th><th>Change</th><th>Change %</th><th></th></tr></thead>
+              <tbody>
+                {enriched.map(q=>(
+                  <tr key={q.ticker}>
+                    <td><span className="ticker-pill">{q.ticker}</span></td>
+                    <td style={{color:"var(--muted2)",fontFamily:"var(--sans)",fontSize:12}}>{q.company_name}</td>
+                    <td>{assetBadge(q.asset_type)}</td>
+                    <td>{fmt.usd(q.price)}</td>
+                    <td className={pnlClass(q.change)}>{q.change>=0?"+":""}{fmt.usd(Math.abs(q.change||0))}</td>
+                    <td><span style={{color:q.change_pct>=0?"var(--mint)":"var(--red)",fontWeight:600}}>{fmt.pct(q.change_pct)}</span></td>
+                    <td><button className="btn btn-ghost btn-sm" onClick={()=>remove(q.ticker)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ History ══ */
+function History() {
+  const { token } = useApp();
+  const [orders, setOrders] = useState([]);
+  const [filter, setFilter] = useState("ALL");
+
+  useEffect(()=>{
+    api("GET","/portfolio/orders?limit=100",null,token).then(d=>setOrders(d.orders||[])).catch(()=>{});
+  },[]);
+
+  const filtered = orders.filter(o=> filter==="ALL"||o.order_type===filter);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Order History</div><div className="page-sub">{orders.length} total orders</div></div>
+      </div>
+      <div className="tabs" style={{marginBottom:16}}>
+        {["ALL","BUY","SELL"].map(f=><div key={f} className={`tab ${filter===f?"active":""}`} onClick={()=>setFilter(f)}>{f}</div>)}
+      </div>
+      <div className="card">
+        {filtered.length===0 ? (
+          <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No orders yet.</div></div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Time</th><th>Ticker</th><th>Type</th><th>Side</th><th>Qty</th><th>Price</th><th>Total</th><th>Note</th></tr></thead>
+              <tbody>
+                {filtered.map(o=>(
+                  <tr key={o.id}>
+                    <td style={{color:"var(--muted)"}}>{o.id}</td>
+                    <td style={{color:"var(--muted2)",fontSize:11}}>{new Date(o.executed_at).toLocaleString()}</td>
+                    <td><span className="ticker-pill">{o.ticker}</span></td>
+                    <td>{assetBadge(o.asset_type)}</td>
+                    <td><span className={`badge ${o.order_type==="BUY"?"badge-buy":"badge-sell"}`}>{o.order_type}</span></td>
+                    <td>{fmt.num(o.quantity)}</td>
+                    <td>{fmt.usd(o.price)}</td>
+                    <td style={{fontWeight:600}}>{fmt.usd(o.total_value)}</td>
+                    <td style={{color:"var(--muted2)",fontSize:12,fontFamily:"var(--sans)"}}>{o.note||"—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ Leaderboard */
+function Leaderboard() {
+  const { token } = useApp();
+  const [entries, setEntries] = useState([]);
+  useEffect(()=>{
+    api("GET","/leaderboard",null,token).then(d=>setEntries(d.leaderboard||[])).catch(()=>{});
+  },[]);
+
+  const rankClass = r => r===1?"rank-1":r===2?"rank-2":r===3?"rank-3":"rank-n";
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Leaderboard</div><div className="page-sub">Top traders by portfolio value</div></div>
+      </div>
+      <div className="card">
+        {entries.length===0 ? (
+          <div className="empty"><div className="empty-icon">🏆</div><div className="empty-text">No data yet.</div></div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Rank</th><th>Trader</th><th>Portfolio Value</th><th>P&L</th><th>Return</th></tr></thead>
+              <tbody>
+                {entries.map(e=>(
+                  <tr key={e.username}>
+                    <td><div className={`rank-badge ${rankClass(e.rank)}`}>{e.rank}</div></td>
+                    <td>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div className="avatar" style={{background:e.avatar_color,fontSize:12}}>
+                          {(e.display_name||e.username)[0].toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:600}}>{e.display_name||e.username}</div>
+                          <div style={{fontSize:11,color:"var(--muted)"}}>@{e.username}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{fontWeight:600,fontFamily:"var(--mono)"}}>{fmt.usd(e.total_value)}</td>
+                    <td className={pnlClass(e.pnl)}>{fmt.usd(e.pnl)}</td>
+                    <td><span style={{color:e.pnl_pct>=0?"var(--mint)":"var(--red)",fontWeight:700,fontFamily:"var(--mono)"}}>{fmt.pct(e.pnl_pct)}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════ App Root ══ */
+function App() {
+  const [auth, setAuth] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("investeng_auth")||"null"); } catch{ return null; }
+  });
+  const [page, setPage] = useState("dashboard");
+  const [portfolio, setPortfolio] = useState(null);
+  const [prices, setPrices] = useState({});
+  const [toasts, setToasts] = useState([]);
+  const wsRef = useRef(null);
+
+  const addToast = useCallback((msg, type="success")=>{
+    const id = Date.now();
+    setToasts(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 4000);
+  },[]);
+
+  const refreshPortfolio = useCallback(async()=>{
+    if(!auth) return;
+    try {
+      const data = await api("GET","/portfolio",null,auth.access_token);
+      setPortfolio(data);
+    } catch{}
+  },[auth]);
+
+  // Initial load
+  useEffect(()=>{
+    if(!auth) return;
+    refreshPortfolio();
+    api("GET","/market/prices",null,auth.access_token).then(d=>setPrices(d.prices||{})).catch(()=>{});
+  },[auth]);
+
+  // WebSocket
+  useEffect(()=>{
+    if(!auth) return;
+    const ws = new WebSocket(`ws://localhost:8000/ws/${auth.access_token}`);
+    wsRef.current = ws;
+    ws.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if(msg.type==="prices") setPrices(p=>({...p,...msg.data}));
+    };
+    ws.onerror = ()=>{};
+    return () => ws.close();
+  },[auth]);
+
+  // Auto-refresh portfolio every 30s
+  useEffect(()=>{
+    if(!auth) return;
+    const interval = setInterval(refreshPortfolio, 30000);
+    return ()=>clearInterval(interval);
+  },[auth, refreshPortfolio]);
+
+  const login = data => {
+    localStorage.setItem("investeng_auth", JSON.stringify(data));
+    setAuth(data);
+  };
+  const logout = () => {
+    localStorage.removeItem("investeng_auth");
+    setAuth(null); setPortfolio(null); setPrices({});
+  };
+
+  if(!auth) return <AuthScreen onLogin={login}/>;
+
+  const pageMap = {
+    dashboard: <Dashboard/>,
+    market   : <Markets/>,
+    portfolio: <Portfolio/>,
+    trade    : <Trade/>,
+    watchlist: <WatchlistPage/>,
+    history  : <History/>,
+    leaderboard: <Leaderboard/>,
+  };
+
+  const priceCount = Object.keys(prices).length;
+
+  return (
+    <AppCtx.Provider value={{ auth, token:auth.access_token, portfolio, prices, refreshPortfolio, addToast }}>
+      <div className="layout">
+        {/* Topbar */}
+        <div className="topbar">
+          <div className="logo"><div className="logo-mark">📈</div>InvestEng</div>
+          <div style={{flex:1}}/>
+          <TickerTape prices={prices}/>
+          <div style={{flex:1}}/>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{fontSize:12,fontFamily:"var(--mono)",color:"var(--muted)"}}>
+              <span className="live-dot" style={{marginRight:6}}/>
+              {priceCount} live
+            </div>
+            <div style={{fontSize:13,fontWeight:600}}>{fmt.usd(portfolio?.total_value)}</div>
+            <div className={`metric-sub ${pnlClass(portfolio?.total_pnl_pct)}`} style={{fontSize:12}}>
+              {fmt.pct(portfolio?.total_pnl_pct)}
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={logout}>Sign Out</button>
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <Sidebar page={page} setPage={setPage} user={auth}/>
+
+        {/* Main */}
+        <main className="main">
+          {pageMap[page] || <div>Page not found</div>}
+        </main>
+      </div>
+      <ToastContainer toasts={toasts}/>
+    </AppCtx.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
