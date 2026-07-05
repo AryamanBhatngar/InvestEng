@@ -47,9 +47,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-import database
-from database import get_db, engine
-from models import (
+from backend import database
+from backend.database import get_db, engine
+from backend.models import(
     Base, User, Portfolio, Position, Order, Watchlist,
     PortfolioSnapshot, PriceCache,
 )
@@ -59,13 +59,18 @@ from schemas import (
     WatchlistAdd, WatchlistOut, LeaderboardEntry,
     SnapshotOut,
 )
-from auth import hash_password, verify_password, create_token, get_current_user
-from market_feed import (
-    price_refresh_loop, get_live_quote, get_all_cached_prices,
-    search_tickers, TRADEABLE_UNIVERSE, ALL_TICKERS,
-    register_ws, unregister_ws,
+from backend.auth import hash_password, verify_password, create_token, get_current_user
+from backend.market_feed import (
+    price_refresh_loop,
+    get_live_quote,
+    get_all_cached,
+    search_tickers,
+    TRADEABLE_UNIVERSE,
+    ALL_TICKERS,
+    register_ws,
+    unregister_ws,
 )
-from paper_trading import (
+from backend.paper_trading import (
     execute_order, build_portfolio_response, take_portfolio_snapshot,
 )
 
@@ -206,7 +211,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 @app.get("/market/prices", tags=["Market"])
 def get_all_prices():
-    prices = get_all_cached_prices()
+    prices = get_all_cached()
     return {"prices": prices, "count": len(prices), "timestamp": datetime.utcnow().isoformat()}
 
 
@@ -235,7 +240,7 @@ def get_universe():
 @app.get("/market/movers", tags=["Market"])
 def get_movers():
     """Top gainers, losers, and most active from cached prices."""
-    prices = list(get_all_cached_prices().values())
+    prices = list(get_all_cached().values())
     if not prices:
         return {"gainers": [], "losers": [], "active": []}
     sorted_by_pct = sorted(prices, key=lambda x: x.get("change_pct", 0))
@@ -388,7 +393,7 @@ def get_watchlist(
 ):
     items = db.query(Watchlist).filter(Watchlist.user_id == current_user.id).all()
     result = []
-    prices = get_all_cached_prices()
+    prices = get_all_cached()
     for item in items:
         q = prices.get(item.ticker, {})
         result.append({
@@ -484,7 +489,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
     Also accepts client messages: {"action": "subscribe", "tickers": ["AAPL",...]}
     """
     # Validate token
-    from auth import decode_token
+    from backend.auth import decode_token
     payload = decode_token(token)
     if not payload:
         await websocket.close(code=4001, reason="Invalid token")
@@ -494,7 +499,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
     logger.info("WS connected | user=%s", payload.get("username"))
 
     # Send initial price dump
-    prices = get_all_cached_prices()
+    prices = get_all_cached()
     if prices:
         await websocket.send_json({"type": "prices", "data": prices})
 
@@ -530,7 +535,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
 
 @app.get("/health")
 def health():
-    prices = get_all_cached_prices()
+    prices = get_all_cached()
     return {
         "status"       : "ok",
         "version"      : "2.0.0",
