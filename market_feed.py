@@ -1,305 +1,544 @@
 """
-market_feed.py — InvestEng Real-Time Market Feed
-=================================================
-Fetches live prices from yfinance every 15 seconds and broadcasts
-to all connected WebSocket clients. Uses an in-memory cache to serve
-instant responses and a SQLite price_cache for offline resilience.
+main.py — InvestEng FastAPI Application
+=========================================
+The complete backend for the InvestEng paper trading platform.
 
-Supported asset classes mirror the full InvestEng universe.
+Routes
+------
+  POST /auth/register          — create account
+  POST /auth/login             — get JWT token
+  GET  /auth/me                — current user profile
+
+  GET  /market/prices          — all live prices
+  GET  /market/quote/{ticker}  — single live quote
+  GET  /market/search          — search by ticker/name
+  GET  /market/universe        — full tradeable universe
+
+  GET  /portfolio              — portfolio with live P&L
+  GET  /portfolio/history      — equity curve snapshots
+  GET  /portfolio/orders       — order history
+
+  POST /trade                  — execute BUY or SELL order
+
+  GET  /watchlist              — user watchlist
+  POST /watchlist              — add to watchlist
+  DELETE /watchlist/{ticker}   — remove from watchlist
+
+  GET  /leaderboard            — top portfolios ranked by P&L
+
+  WS   /ws/{token}             — real-time price stream
+
+Run:  uvicorn main:app --reload --port 8000
 """
 
 import asyncio
+import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-import yfinance as yf
-import pandas as pd
+from fastapi import (
+    FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect,
+    status, Query, BackgroundTasks,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from database import SessionLocal
-from models import PriceCache
+from backend import database
+from backend.database import get_db, engine
+from backend.models import(
+    Base, User, Portfolio, Position, Order, Watchlist,
+    PortfolioSnapshot, PriceCache,
+)
+from schemas import (
+    RegisterRequest, LoginRequest, TokenResponse, UserOut,
+    OrderRequest, OrderOut, PortfolioOut,
+    WatchlistAdd, WatchlistOut, LeaderboardEntry,
+    SnapshotOut,
+)
+from backend.auth import hash_password, verify_password, create_token, get_current_user
+from backend.market_feed import (
+    price_refresh_loop,
+    get_live_quote,
+    get_all_cached,
+    search_tickers,
+    TRADEABLE_UNIVERSE,
+    ALL_TICKERS,
+    register_ws,
+    unregister_ws,
+)
+from backend.paper_trading import (
+    execute_order, build_portfolio_response, take_portfolio_snapshot,
+)
 
-logger = logging.getLogger("InvestEng.MarketFeed")
-
-REFRESH_INTERVAL = 15   # seconds between live price polls
-
-# Full tradeable universe — exactly what users can buy/sell
-TRADEABLE_UNIVERSE = {
-    "us_stocks": {
-        "AAPL": "Apple Inc.",
-        "MSFT": "Microsoft Corp.",
-        "GOOGL": "Alphabet Inc.",
-        "AMZN": "Amazon.com Inc.",
-        "NVDA": "NVIDIA Corp.",
-        "META": "Meta Platforms Inc.",
-        "TSLA": "Tesla Inc.",
-        "JPM": "JPMorgan Chase & Co.",
-        "BRK-B": "Berkshire Hathaway",
-        "UNH": "UnitedHealth Group",
-        "V": "Visa Inc.",
-        "MA": "Mastercard Inc.",
-        "JNJ": "Johnson & Johnson",
-        "WMT": "Walmart Inc.",
-        "PG": "Procter & Gamble",
-        "XOM": "Exxon Mobil Corp.",
-        "NFLX": "Netflix Inc.",
-        "AMD": "Advanced Micro Devices",
-        "INTC": "Intel Corp.",
-        "DIS": "Walt Disney Co.",
-    },
-    "etfs": {
-        "SPY": "SPDR S&P 500 ETF",
-        "QQQ": "Invesco Nasdaq-100 ETF",
-        "VTI": "Vanguard Total Market ETF",
-        "BND": "Vanguard Total Bond ETF",
-        "GLD": "SPDR Gold ETF",
-        "IWM": "iShares Russell 2000 ETF",
-        "VEA": "Vanguard Dev. Markets ETF",
-        "VWO": "Vanguard Emerging Markets ETF",
-        "ARKK": "ARK Innovation ETF",
-        "SQQQ": "ProShares UltraPro Short QQQ",
-    },
-    "crypto": {
-        "BTC-USD": "Bitcoin",
-        "ETH-USD": "Ethereum",
-        "BNB-USD": "Binance Coin",
-        "SOL-USD": "Solana",
-        "XRP-USD": "Ripple",
-        "ADA-USD": "Cardano",
-        "DOGE-USD": "Dogecoin",
-        "AVAX-USD": "Avalanche",
-    },
-}
-
-ALL_TICKERS = {
-    t: {"name": name, "asset_type": atype}
-    for atype, group in TRADEABLE_UNIVERSE.items()
-    for t, name in group.items()
-}
-
-# In-memory price store (ticker → quote dict)
-_price_store: dict[str, dict] = {}
-# WebSocket broadcast callbacks
-_ws_subscribers: set = set()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("InvestEng.API")
 
 
-def register_ws(callback):
-    _ws_subscribers.add(callback)
+# ---------------------------------------------------------------------------
+# Lifespan — startup / shutdown
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create all DB tables
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database initialised")
+
+    # Start market data feed in background
+    feed_task = asyncio.create_task(price_refresh_loop())
+    logger.info("Market feed started")
+
+    # Start hourly snapshot task
+    snapshot_task = asyncio.create_task(periodic_snapshots())
+
+    yield
+
+    feed_task.cancel()
+    snapshot_task.cancel()
+    logger.info("InvestEng API shut down")
 
 
-def unregister_ws(callback):
-    _ws_subscribers.discard(callback)
-
-
-def get_cached_price(ticker: str) -> Optional[dict]:
-    """Get from in-memory store first, fall back to DB cache."""
-    if ticker in _price_store:
-        return _price_store[ticker]
-    db: Session = SessionLocal()
-    try:
-        row = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
-        if row:
-            return {
-                "ticker"      : row.ticker,
-                "company_name": row.company_name,
-                "price"       : row.price,
-                "change"      : row.change,
-                "change_pct"  : row.change_pct,
-                "volume"      : row.volume,
-                "day_high"    : row.day_high,
-                "day_low"     : row.day_low,
-                "open_price"  : row.open_price,
-                "market_cap"  : row.market_cap,
-                "asset_type"  : ALL_TICKERS.get(ticker, {}).get("asset_type", "us_stocks"),
-                "fetched_at"  : row.fetched_at.isoformat(),
-            }
-    finally:
-        db.close()
-    return None
-
-
-def get_all_cached_prices() -> dict[str, dict]:
-    return dict(_price_store)
-
-
-def _fetch_prices(tickers: list[str]) -> dict[str, dict]:
-    """Fetch live quotes for a batch of tickers via yfinance."""
-    if not tickers:
-        return {}
-    results = {}
-    try:
-        data = yf.download(
-            tickers=tickers,
-            period="2d",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            threads=True,
-            progress=False,
-        )
-        info_cache = {}
-        for ticker in tickers:
-            try:
-                meta = ALL_TICKERS.get(ticker, {})
-                # Extract latest price
-                if len(tickers) == 1:
-                    df = data
-                else:
-                    if ticker not in data.columns.get_level_values(1 if isinstance(data.columns, pd.MultiIndex) else 0):
-                        continue
-                    df = data.xs(ticker, axis=1, level=1) if isinstance(data.columns, pd.MultiIndex) else data
-
-                if df.empty or len(df) < 1:
-                    continue
-
-                latest = df.iloc[-1]
-                prev   = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
-
-                price       = float(latest.get("Close", latest.get("close", 0)) or 0)
-                prev_close  = float(prev.get("Close",  prev.get("close",  price)) or price)
-                change      = round(price - prev_close, 4)
-                change_pct  = round((change / prev_close * 100) if prev_close else 0, 4)
-                volume      = float(latest.get("Volume", latest.get("volume", 0)) or 0)
-                day_high    = float(latest.get("High",   latest.get("high",  price)) or price)
-                day_low     = float(latest.get("Low",    latest.get("low",   price)) or price)
-                open_price  = float(latest.get("Open",   latest.get("open",  price)) or price)
-
-                if price <= 0:
-                    continue
-
-                results[ticker] = {
-                    "ticker"      : ticker,
-                    "company_name": meta.get("name", ticker),
-                    "asset_type"  : meta.get("asset_type", "us_stocks"),
-                    "price"       : price,
-                    "change"      : change,
-                    "change_pct"  : change_pct,
-                    "volume"      : volume,
-                    "day_high"    : day_high,
-                    "day_low"     : day_low,
-                    "open_price"  : open_price,
-                    "market_cap"  : None,
-                    "fetched_at"  : datetime.utcnow().isoformat(),
-                }
-            except Exception as e:
-                logger.debug("Price extract failed for %s: %s", ticker, e)
-    except Exception as e:
-        logger.warning("yfinance batch fetch failed: %s", e)
-    return results
-
-
-def _persist_prices(prices: dict[str, dict]):
-    """Write latest prices to SQLite price_cache table."""
-    db: Session = SessionLocal()
-    try:
-        for ticker, q in prices.items():
-            row = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
-            if row:
-                row.price        = q["price"]
-                row.change       = q["change"]
-                row.change_pct   = q["change_pct"]
-                row.volume       = q["volume"]
-                row.day_high     = q.get("day_high")
-                row.day_low      = q.get("day_low")
-                row.open_price   = q.get("open_price")
-                row.company_name = q.get("company_name")
-                row.fetched_at   = datetime.utcnow()
-            else:
-                db.add(PriceCache(
-                    ticker       = ticker,
-                    price        = q["price"],
-                    change       = q["change"],
-                    change_pct   = q["change_pct"],
-                    volume       = q["volume"],
-                    day_high     = q.get("day_high"),
-                    day_low      = q.get("day_low"),
-                    open_price   = q.get("open_price"),
-                    company_name = q.get("company_name"),
-                    fetched_at   = datetime.utcnow(),
-                ))
-        db.commit()
-    except Exception as e:
-        logger.error("Price persist error: %s", e)
-        db.rollback()
-    finally:
-        db.close()
-
-
-async def price_refresh_loop():
-    """
-    Background coroutine — runs forever, refreshing prices every REFRESH_INTERVAL
-    seconds and broadcasting to all WebSocket subscribers.
-    """
-    all_tickers = list(ALL_TICKERS.keys())
-    # Split into batches of 20 to avoid yfinance rate limits
-    batch_size = 20
-    batches = [all_tickers[i:i+batch_size] for i in range(0, len(all_tickers), batch_size)]
-
-    logger.info("Market feed started | %d tickers | refresh=%ds", len(all_tickers), REFRESH_INTERVAL)
-
+async def periodic_snapshots():
+    """Take portfolio snapshots every 30 minutes."""
     while True:
+        await asyncio.sleep(1800)
+        db: Session = database.SessionLocal()
         try:
-            fresh = {}
-            for batch in batches:
-                fetched = await asyncio.get_event_loop().run_in_executor(
-                    None, _fetch_prices, batch
-                )
-                fresh.update(fetched)
-
-            if fresh:
-                _price_store.update(fresh)
-                await asyncio.get_event_loop().run_in_executor(None, _persist_prices, fresh)
-                # Broadcast to all connected WebSocket clients
-                if _ws_subscribers:
-                    payload = {"type": "prices", "data": fresh}
-                    dead = set()
-                    for cb in list(_ws_subscribers):
-                        try:
-                            await cb(payload)
-                        except Exception:
-                            dead.add(cb)
-                    _ws_subscribers -= dead
-                logger.debug("Prices updated | %d tickers broadcast to %d clients",
-                             len(fresh), len(_ws_subscribers))
-        except Exception as e:
-            logger.error("Price refresh loop error: %s", e)
-
-        await asyncio.sleep(REFRESH_INTERVAL)
+            portfolios = db.query(Portfolio).all()
+            for p in portfolios:
+                await take_portfolio_snapshot(db, p.id)
+        finally:
+            db.close()
 
 
-async def get_live_quote(ticker: str) -> Optional[dict]:
-    """Fetch a single ticker's live price on demand."""
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="InvestEng API",
+    description="Real-time paper trading platform",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Serve frontend static files
+import os
+from pathlib import Path
+frontend_dir = Path(__file__).parent.parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
+
+# ---------------------------------------------------------------------------
+# Auth Routes
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/register", response_model=TokenResponse, tags=["Auth"])
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.username == req.username).first():
+        raise HTTPException(status_code=400, detail="Username already taken.")
+    if db.query(User).filter(User.email == req.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered.")
+
+    colors = ["#7c3aed","#059669","#dc2626","#d97706","#2563eb","#db2777","#0891b2"]
+    color  = colors[hash(req.username) % len(colors)]
+
+    user = User(
+        username     = req.username,
+        email        = req.email,
+        hashed_pw    = hash_password(req.password),
+        display_name = req.display_name or req.username.title(),
+        avatar_color = color,
+    )
+    db.add(user)
+    db.flush()
+
+    # Create portfolio with $100,000 demo balance
+    portfolio = Portfolio(user_id=user.id, cash_balance=100_000.0, initial_balance=100_000.0)
+    db.add(portfolio)
+    db.commit()
+    db.refresh(user)
+
+    token = create_token(user.id, user.username)
+    return TokenResponse(
+        access_token = token,
+        user_id      = user.id,
+        username     = user.username,
+        display_name = user.display_name,
+        avatar_color = user.avatar_color,
+    )
+
+
+@app.post("/auth/login", response_model=TokenResponse, tags=["Auth"])
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == req.username.lower()).first()
+    if not user or not verify_password(req.password, user.hashed_pw):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    token = create_token(user.id, user.username)
+    return TokenResponse(
+        access_token = token,
+        user_id      = user.id,
+        username     = user.username,
+        display_name = user.display_name,
+        avatar_color = user.avatar_color,
+    )
+
+
+@app.get("/auth/me", response_model=UserOut, tags=["Auth"])
+def get_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+# ---------------------------------------------------------------------------
+# Market Data Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/market/prices", tags=["Market"])
+def get_all_prices():
+    prices = get_all_cached()
+    return {"prices": prices, "count": len(prices), "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/market/quote/{ticker}", tags=["Market"])
+async def get_quote(ticker: str):
     ticker = ticker.upper()
-    # Try memory cache first (< 30s stale)
-    if ticker in _price_store:
-        cached = _price_store[ticker]
-        fetched = datetime.fromisoformat(cached["fetched_at"].replace("Z", ""))
-        age = (datetime.utcnow() - fetched).total_seconds()
-        if age < 30:
-            return cached
-
-    # Fresh fetch
-    result = await asyncio.get_event_loop().run_in_executor(None, _fetch_prices, [ticker])
-    if result and ticker in result:
-        _price_store[ticker] = result[ticker]
-        await asyncio.get_event_loop().run_in_executor(None, _persist_prices, result)
-        return result[ticker]
-
-    return get_cached_price(ticker)
+    quote  = await get_live_quote(ticker)
+    if not quote:
+        raise HTTPException(status_code=404, detail=f"No price data for {ticker}")
+    return quote
 
 
-def search_tickers(query: str, limit: int = 10) -> list[dict]:
-    """Search tradeable universe by ticker or company name."""
-    q = query.upper().strip()
-    results = []
-    for ticker, meta in ALL_TICKERS.items():
-        name = meta.get("name", "")
-        if q in ticker.upper() or q in name.upper():
-            results.append({
-                "ticker"      : ticker,
-                "company_name": name,
-                "asset_type"  : meta.get("asset_type", "us_stocks"),
-                "exchange"    : "DEMO",
-            })
-    return results[:limit]
+@app.get("/market/search", tags=["Market"])
+def search_market(q: str = Query(min_length=1), limit: int = 10):
+    return {"results": search_tickers(q, limit=limit)}
+
+
+@app.get("/market/universe", tags=["Market"])
+def get_universe():
+    return {
+        "universe": TRADEABLE_UNIVERSE,
+        "total": len(ALL_TICKERS),
+    }
+
+
+@app.get("/market/movers", tags=["Market"])
+def get_movers():
+    """Top gainers, losers, and most active from cached prices."""
+    prices = list(get_all_cached().values())
+    if not prices:
+        return {"gainers": [], "losers": [], "active": []}
+    sorted_by_pct = sorted(prices, key=lambda x: x.get("change_pct", 0))
+    sorted_by_vol = sorted(prices, key=lambda x: x.get("volume", 0), reverse=True)
+    return {
+        "gainers": list(reversed(sorted_by_pct[-5:])),
+        "losers" : sorted_by_pct[:5],
+        "active" : sorted_by_vol[:5],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/portfolio", tags=["Portfolio"])
+def get_portfolio(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    portfolio = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found.")
+    return build_portfolio_response(db, portfolio)
+
+
+@app.get("/portfolio/history", tags=["Portfolio"])
+def get_portfolio_history(
+    limit: int = Query(default=168, le=720),   # default: 1 week of hourly
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    portfolio = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found.")
+
+    snaps = (
+        db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.portfolio_id == portfolio.id)
+        .order_by(PortfolioSnapshot.snapped_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "history": [
+            {
+                "total_value": s.total_value,
+                "cash"       : s.cash,
+                "invested"   : s.invested,
+                "pnl"        : s.pnl,
+                "pnl_pct"    : s.pnl_pct,
+                "snapped_at" : s.snapped_at.isoformat(),
+            }
+            for s in reversed(snaps)
+        ]
+    }
+
+
+@app.get("/portfolio/orders", tags=["Portfolio"])
+def get_orders(
+    limit: int = Query(default=50, le=200),
+    ticker: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    portfolio = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found.")
+
+    q = db.query(Order).filter(Order.portfolio_id == portfolio.id)
+    if ticker:
+        q = q.filter(Order.ticker == ticker.upper())
+    orders = q.order_by(Order.executed_at.desc()).limit(limit).all()
+    return {
+        "orders": [
+            {
+                "id"          : o.id,
+                "ticker"      : o.ticker,
+                "company_name": o.company_name,
+                "asset_type"  : o.asset_type,
+                "order_type"  : o.order_type,
+                "quantity"    : o.quantity,
+                "price"       : o.price,
+                "total_value" : o.total_value,
+                "status"      : o.status,
+                "note"        : o.note,
+                "executed_at" : o.executed_at.isoformat(),
+            }
+            for o in orders
+        ],
+        "count": len(orders),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Trading Route
+# ---------------------------------------------------------------------------
+
+@app.post("/trade", tags=["Trading"])
+async def place_order(
+    req: OrderRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    portfolio = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found.")
+
+    order = await execute_order(
+        db         = db,
+        portfolio  = portfolio,
+        ticker     = req.ticker,
+        order_type = req.order_type,
+        quantity   = req.quantity,
+        note       = req.note,
+    )
+
+    # Async snapshot after trade
+    background_tasks.add_task(take_portfolio_snapshot, db, portfolio.id)
+
+    return {
+        "success"   : True,
+        "order_id"  : order.id,
+        "message"   : (
+            f"{'Bought' if order.order_type == 'BUY' else 'Sold'} "
+            f"{order.quantity:.4f} shares of {order.ticker} "
+            f"@ ${order.price:,.2f} (Total: ${order.total_value:,.2f})"
+        ),
+        "order": {
+            "id"         : order.id,
+            "ticker"     : order.ticker,
+            "order_type" : order.order_type,
+            "quantity"   : order.quantity,
+            "price"      : order.price,
+            "total_value": order.total_value,
+            "executed_at": order.executed_at.isoformat(),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Watchlist Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/watchlist", tags=["Watchlist"])
+def get_watchlist(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    items = db.query(Watchlist).filter(Watchlist.user_id == current_user.id).all()
+    result = []
+    prices = get_all_cached()
+    for item in items:
+        q = prices.get(item.ticker, {})
+        result.append({
+            "id"          : item.id,
+            "ticker"      : item.ticker,
+            "company_name": item.company_name,
+            "asset_type"  : item.asset_type,
+            "price"       : q.get("price", 0),
+            "change"      : q.get("change", 0),
+            "change_pct"  : q.get("change_pct", 0),
+            "added_at"    : item.added_at.isoformat(),
+        })
+    return {"watchlist": result}
+
+
+@app.post("/watchlist", tags=["Watchlist"])
+def add_to_watchlist(
+    req: WatchlistAdd,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if req.ticker not in ALL_TICKERS:
+        raise HTTPException(status_code=400, detail=f"{req.ticker} not in tradeable universe.")
+    existing = db.query(Watchlist).filter(
+        Watchlist.user_id == current_user.id,
+        Watchlist.ticker  == req.ticker,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"{req.ticker} already in watchlist.")
+    meta = ALL_TICKERS[req.ticker]
+    item = Watchlist(
+        user_id      = current_user.id,
+        ticker       = req.ticker,
+        company_name = meta.get("name"),
+        asset_type   = meta.get("asset_type", "us_stocks"),
+    )
+    db.add(item)
+    db.commit()
+    return {"success": True, "ticker": req.ticker}
+
+
+@app.delete("/watchlist/{ticker}", tags=["Watchlist"])
+def remove_from_watchlist(
+    ticker: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = db.query(Watchlist).filter(
+        Watchlist.user_id == current_user.id,
+        Watchlist.ticker  == ticker.upper(),
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Not in watchlist.")
+    db.delete(item)
+    db.commit()
+    return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard
+# ---------------------------------------------------------------------------
+
+@app.get("/leaderboard", tags=["Leaderboard"])
+def get_leaderboard(db: Session = Depends(get_db)):
+    portfolios = db.query(Portfolio).all()
+    entries = []
+    for portfolio in portfolios:
+        user = portfolio.user
+        data = build_portfolio_response(db, portfolio)
+        entries.append({
+            "username"    : user.username,
+            "display_name": user.display_name,
+            "avatar_color": user.avatar_color,
+            "total_value" : data["total_value"],
+            "pnl"         : data["total_pnl"],
+            "pnl_pct"     : data["total_pnl_pct"],
+        })
+    entries.sort(key=lambda x: x["total_value"], reverse=True)
+    for i, e in enumerate(entries):
+        e["rank"] = i + 1
+    return {"leaderboard": entries[:50]}
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — Real-time price stream
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/{token}")
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    """
+    Live price stream. Clients subscribe by connecting with their JWT token.
+    Broadcasts price updates every ~15 seconds.
+    Also accepts client messages: {"action": "subscribe", "tickers": ["AAPL",...]}
+    """
+    # Validate token
+    from backend.auth import decode_token
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    await websocket.accept()
+    logger.info("WS connected | user=%s", payload.get("username"))
+
+    # Send initial price dump
+    prices = get_all_cached()
+    if prices:
+        await websocket.send_json({"type": "prices", "data": prices})
+
+    # Register as a broadcast subscriber
+    async def broadcast(payload: dict):
+        await websocket.send_json(payload)
+
+    register_ws(broadcast)
+
+    try:
+        while True:
+            # Keep connection alive and handle client messages
+            try:
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                data = json.loads(msg)
+                # Clients can request a specific ticker's data
+                if data.get("action") == "quote" and data.get("ticker"):
+                    q = await get_live_quote(data["ticker"].upper())
+                    if q:
+                        await websocket.send_json({"type": "quote", "data": q})
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                await websocket.send_json({"type": "ping", "ts": datetime.utcnow().isoformat()})
+    except WebSocketDisconnect:
+        logger.info("WS disconnected | user=%s", payload.get("username"))
+    finally:
+        unregister_ws(broadcast)
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+def health():
+    prices = get_all_cached()
+    return {
+        "status"       : "ok",
+        "version"      : "2.0.0",
+        "prices_cached": len(prices),
+        "timestamp"    : datetime.utcnow().isoformat(),
+    }
